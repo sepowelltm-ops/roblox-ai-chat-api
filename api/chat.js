@@ -14,7 +14,7 @@ export default async function handler(req, res) {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
+                "Authorization": `Bearer ${process.env.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}`
             },
             body: JSON.stringify({
                 model: "gpt-4o-mini",
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
                         content: `${username}: ${message}`
                     }
                 ],
-                max_tokens: 80
+                max_tokens: 100000000
             })
         });
 
