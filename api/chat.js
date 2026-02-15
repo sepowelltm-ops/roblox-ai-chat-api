@@ -1,62 +1,114 @@
-export default async function handler(req, res) {
-    try {
-        // Allow browser testing
-        if (req.method === "GET") {
-            return res.status(200).json({
-                status: "API online. Send POST with message + username."
-            });
-        }
+local Players = game:GetService("Players")
+local TextChatService = game:GetService("TextChatService")
+local HttpService = game:GetService("HttpService")
 
-        if (req.method !== "POST") {
-            return res.status(405).json({ error: "Method not allowed" });
-        }
+-- 🔧 CHANGE THIS TO YOUR API URL (NO .js AT THE END)
+local AI_API = "https://roblox-ai-chat-api.vercel.app/api/chat"
 
-        const { message, username } = req.body || {};
+local COOLDOWN = 5 -- seconds
+local RANGE = 10 -- studs
 
-        if (!message) {
-            return res.status(400).json({ error: "Missing message" });
-        }
+local localPlayer = Players.LocalPlayer
+local lastReplyTime = {} -- cooldown tracker per player
 
-        const apiKey = process.env.OPENAI_API_KEY;
+local function getRoot(character)
+	return character and character:FindFirstChild("HumanoidRootPart")
+end
 
-        if (!apiKey) {
-            return res.status(500).json({
-                error: "OPENAI_API_KEY not set in Vercel environment variables"
-            });
-        }
+local function getAIResponse(message, username)
+	local body = {
+		message = message,
+		username = username
+	}
 
-        const response = await fetch("https://api.openai.com/v1/responses", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                model: "gpt-4.1-mini",
-                input: `You are a smart Roblox AI assistant. Reply naturally and briefly.\n\n${username}: ${message}`
-            })
-        });
+	local success, result = pcall(function()
+		return HttpService:PostAsync(
+			AI_API,
+			HttpService:JSONEncode(body),
+			Enum.HttpContentType.ApplicationJson
+		)
+	end)
 
-        const data = await response.json();
+	if not success then
+		warn("HTTP FAILED:", result)
+		return "AI is currently offline."
+	end
 
-        if (!response.ok) {
-            return res.status(500).json({
-                error: "OpenAI request failed",
-                details: data
-            });
-        }
+	local decoded
+	local ok, err = pcall(function()
+		decoded = HttpService:JSONDecode(result)
+	end)
 
-        const reply =
-            data.output?.[0]?.content?.[0]?.text ||
-            "I couldn't generate a response.";
+	if not ok or not decoded then
+		warn("JSON DECODE FAILED:", err)
+		return "Failed to read AI response."
+	end
 
-        return res.status(200).json({ reply });
+	if decoded.error then
+		warn("API ERROR:", decoded.error)
+		return "AI error."
+	end
 
-    } catch (err) {
-        console.error("CRASH:", err);
-        return res.status(500).json({
-            error: "Server crash",
-            details: err.message
-        });
-    }
-}
+	return decoded.reply or "..."
+end
+
+local textChannels = TextChatService:WaitForChild("TextChannels")
+local generalChannel = textChannels:WaitForChild("RBXGeneral")
+
+generalChannel.MessageReceived:Connect(function(messageData)
+	local textSource = messageData.TextSource
+	if not textSource then return end
+
+	local speaker = Players:GetPlayerByUserId(textSource.UserId)
+	if not speaker then return end
+	if speaker == localPlayer then return end -- don't reply to self
+
+	local now = tick()
+
+	-- ⛔ Anti-spam cooldown per player
+	if lastReplyTime[speaker.UserId] and (now - lastReplyTime[speaker.UserId] < COOLDOWN) then
+		return
+	end
+
+	local myChar = localPlayer.Character
+	local theirChar = speaker.Character
+	if not myChar or not theirChar then return end
+
+	local myRoot = getRoot(myChar)
+	local theirRoot = getRoot(theirChar)
+	if not myRoot or not theirRoot then return end
+
+	-- 📏 Distance check (10 studs)
+	local distance = (myRoot.Position - theirRoot.Position).Magnitude
+	if distance > RANGE then return end
+
+	-- 🧠 Get AI reply
+	local aiReply = getAIResponse(messageData.Text, speaker.Name)
+
+	-- 🗨️ Required format: (name); response
+	local formattedMessage = "(" .. speaker.Name .. "); " .. aiReply
+
+	-- Update cooldown BEFORE sending (prevents double spam)
+	lastReplyTime[speaker.UserId] = now
+
+	-- Send chat
+	generalChannel:SendAsync(formattedMessage)
+end)
+
+local HttpService = game:GetService("HttpService")
+local testBody = { message = "hello", username = "TestUser" }
+
+local success, result = pcall(function()
+    return HttpService:PostAsync(
+        "https://roblox-ai-chat-api.vercel.app/api/chat",
+        HttpService:JSONEncode(testBody),
+        Enum.HttpContentType.ApplicationJson
+    )
+end)
+
+if not success then
+    generalChannel:SendAsync("HTTP POST FAILED:", result)
+else
+    generalChannel:SendAsync("Response:", result)
+end
+
